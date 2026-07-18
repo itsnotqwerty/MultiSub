@@ -5,9 +5,8 @@ include_guard(GLOBAL)
 # Set default installation directories
 include(GNUInstallDirs)
 
-if(CMAKE_INSTALL_LIBDIR MATCHES "(CMAKE_SYSTEM_PROCESSOR)")
-  string(REPLACE "CMAKE_SYSTEM_PROCESSOR" "${CMAKE_SYSTEM_PROCESSOR}" CMAKE_INSTALL_LIBDIR "${CMAKE_INSTALL_LIBDIR}")
-endif()
+# OBS expects plugins under <prefix>/lib/obs-plugins for local installs.
+set(CMAKE_INSTALL_LIBDIR "lib")
 
 # Enable find_package targets to become globally available targets
 set(CMAKE_FIND_PACKAGE_TARGETS_GLOBAL TRUE)

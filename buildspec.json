@@ -33,13 +33,13 @@
     },
     "platformConfig": {
         "macos": {
-            "bundleId": "com.example.plugintemplate-for-obs"
+            "bundleId": "com.multisub.obs-plugin"
         }
     },
-    "name": "plugintemplate-for-obs",
-    "displayName": "Plugin Template for OBS",
+    "name": "multisub",
+    "displayName": "MultiSub",
     "version": "1.0.0",
-    "author": "Your Name Here",
-    "website": "https://example.com",
-    "email": "me@example.com"
+    "author": "MultiSub Contributors",
+    "website": "https://github.com/obsproject/obs-plugintemplate",
+    "email": "maintainers@multisub.local"
 }

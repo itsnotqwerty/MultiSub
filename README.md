@@ -1,59 +1,68 @@
-# OBS Plugin Template
+# MultiSub
 
-## Introduction
+MultiSub is an OBS Studio plugin for real-time multi-modal subtitle generation.
+It combines:
 
-The plugin template is meant to be used as a starting point for OBS Studio plugin development. It includes:
+- microphone speech-to-text (ASR)
+- environmental sound event classification
+- lip reading (planned)
+- sign language recognition (planned)
 
-* Boilerplate plugin source code
-* A CMake project file
-* GitHub Actions workflows and repository actions
+to produce richer subtitles with channel-aware output (Dialogue and Environmental).
 
-## Supported Build Environments
+## Status
 
-| Platform  | Tool   |
-|-----------|--------|
-| Windows   | Visual Studio 17 2022 |
-| macOS     | XCode 16.0 |
-| Windows, macOS  | CMake 3.30.5 |
-| Ubuntu 24.04 | CMake 3.28.3 |
-| Ubuntu 24.04 | `ninja-build` |
-| Ubuntu 24.04 | `pkg-config`
-| Ubuntu 24.04 | `build-essential` |
+The repository started from the official OBS plugin template.
+Phase 1 audio MVP scaffold is implemented, with on-screen subtitle rendering still in progress:
 
-## Quick Start
+- OBS filter registration and lifecycle
+- threaded audio processing pipeline (placeholder inference)
+- subtitle fusion and in-memory subtitle buffer
+- architecture/spec/roadmap docs
 
-An absolute bare-bones [Quick Start Guide](https://github.com/obsproject/obs-plugintemplate/wiki/Quick-Start-Guide) is available in the wiki.
+## High-Level Architecture
 
-## Documentation
+- Audio Pipeline: mic audio -> preprocessing -> ASR + sound event classifier
+- Vision Pipeline: frames -> lip reading + sign language recognition (future phases)
+- Fusion Engine: confidence weighted merge into channel-tagged subtitle events
+- Renderer: on-screen overlay in Phase 1, export pipeline in future phases
+- OBS Integration: filter properties and runtime controls
 
-All documentation can be found in the [Plugin Template Wiki](https://github.com/obsproject/obs-plugintemplate/wiki).
+Detailed design: [docs/architecture.md](docs/architecture.md)
 
-Suggested reading to get up and running:
+## Build
 
-* [Getting started](https://github.com/obsproject/obs-plugintemplate/wiki/Getting-Started)
-* [Build system requirements](https://github.com/obsproject/obs-plugintemplate/wiki/Build-System-Requirements)
-* [Build system options](https://github.com/obsproject/obs-plugintemplate/wiki/CMake-Build-System-Options)
+This project uses the OBS plugin template CMake infrastructure.
 
-## GitHub Actions & CI
+Typical local flow:
 
-Default GitHub Actions workflows are available for the following repository actions:
+1. Configure with your platform preset.
+2. Build target using CMake.
+3. Install/package using template helpers.
 
-* `push`: Run for commits or tags pushed to `master` or `main` branches.
-* `pr-pull`: Run when a Pull Request has been pushed or synchronized.
-* `dispatch`: Run when triggered by the workflow dispatch in GitHub's user interface.
-* `build-project`: Builds the actual project and is triggered by other workflows.
-* `check-format`: Checks CMake and plugin source code formatting and is triggered by other workflows.
+Example:
 
-The workflows make use of GitHub repository actions (contained in `.github/actions`) and build scripts (contained in `.github/scripts`) which are not needed for local development, but might need to be adjusted if additional/different steps are required to build the plugin.
+```bash
+cmake --preset linux-x86_64
+cmake --build --preset linux-x86_64
+```
 
-### Retrieving build artifacts
+## Phase Plan
 
-Successful builds on GitHub Actions will produce build artifacts that can be downloaded for testing. These artifacts are commonly simple archives and will not contain package installers or installation programs.
+- Phase 1: audio-only ASR + environmental classification plus on-screen subtitle rendering
+- Phase 2: lip reading fusion
+- Phase 3: sign language recognition
+- Phase 4: multi-channel renderer + UI polish
 
-### Building a Release
+Roadmap details: [docs/roadmap.md](docs/roadmap.md)
 
-To create a release, an appropriately named tag needs to be pushed to the `main`/`master` branch using semantic versioning (e.g., `12.3.4`, `23.4.5-beta2`). A draft release will be created on the associated repository with generated installer packages or installation programs attached as release artifacts.
+## Dependencies (Planned)
 
-## Signing and Notarizing on macOS
+- Core: libobs, CMake 3.28+
+- ML runtime: ONNX Runtime (planned)
+- Audio preprocessing: RNNoise/FFmpeg options (planned)
+- Vision: OpenCV and/or MediaPipe (planned)
 
-Basic concepts of codesigning and notarization on macOS are explained in the correspodning [Wiki article](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS) which has a specific section for the [GitHub Actions setup](https://github.com/obsproject/obs-plugintemplate/wiki/Codesigning-On-macOS#setting-up-code-signing-for-github-actions).
+## Model Distribution
+
+Models are not bundled in source by default. See [docs/models.md](docs/models.md) for licensing and download policy.
