@@ -19,6 +19,7 @@ MultiSub provides real-time subtitle generation in OBS Studio by combining multi
 - Produce dialogue transcript candidates.
 - Produce environmental event candidates.
 - In later phases, ingest frame data for lip and sign processing.
+- Phase 2 scaffold: preprocess video frame windows with center-lower lip ROI extraction and normalization before lip-read inference.
 
 ### 3.2 Fusion
 
@@ -39,6 +40,63 @@ MultiSub provides real-time subtitle generation in OBS Studio by combining multi
 - Toggle channels.
 - Configure max pipeline latency.
 - Configure model backend paths (planned).
+- Configure visual speech backend paths and thresholds:
+	- AV-HuBERT model path (third_party repo/checkpoint or ONNX)
+	- runner Python command
+	- minimum lip-read confidence
+	- minimum frame window size
+
+### 3.5 Vision Runner IPC (Phase 2 Scaffold)
+
+Native AV-HuBERT execution uses a JSON request/response bridge via `src/vision/avhubert_native_runner.py`.
+
+Request schema:
+
+```json
+{
+	"version": "1",
+	"backend": "av_hubert_native",
+	"model": {"path": "..."},
+	"window": {
+		"start_ns": 0,
+		"end_ns": 0,
+		"frame_count": 12,
+		"frame_width": 96,
+		"frame_height": 96
+	},
+	"hints": {"mode": "video", "max_hypotheses": 3}
+}
+```
+
+Response schema:
+
+```json
+{
+	"version": "1",
+	"status": "ok",
+	"backend": "av_hubert_native",
+	"hypotheses": [
+		{
+			"text": "decoded text",
+			"confidence": 0.82,
+			"start_ns": 0,
+			"end_ns": 0
+		}
+	],
+	"error": ""
+}
+```
+
+If `status` is `error` or `hypotheses` is empty, the visual stream degrades gracefully and fusion continues using available modalities.
+
+Native decode activation:
+
+- Set `MULTISUB_AVHUBERT_ENABLE_DECODE=1` to force third_party decode execution.
+- Provide AV-HuBERT checkpoint and dataset paths through request `model.checkpoint_path` / `decode.{data_dir,label_dir}` or environment variables:
+	- `MULTISUB_AVHUBERT_REPO`
+	- `MULTISUB_AVHUBERT_CHECKPOINT`
+
+Without these decode inputs, the runner returns a safe empty hypothesis set.
 
 ## 4. Non-Functional Requirements
 

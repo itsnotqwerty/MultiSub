@@ -29,9 +29,11 @@ Exit criteria:
 
 Objective: improve dialogue confidence with lip-reading signals.
 
-- [ ] Frame processor and face/lip ROI extraction.
-- [ ] Lip-reading model wrapper.
-- [ ] Timestamp alignment and confidence fusion with ASR.
+- [x] Abstract modality events onto a shared fusion timeline for multi-source choreography.
+- [x] Frame processor and lip ROI extraction scaffold (center-lower crop + normalization window).
+- [x] Lip-reading model wrapper scaffold with native AV-HuBERT JSON runner bridge.
+- [x] Timestamp alignment and confidence fusion scaffolding for visual timeline events.
+- [x] Native AV-HuBERT decode invocation and tokenizer integration.
 
 ## Phase 3: Sign Language
 

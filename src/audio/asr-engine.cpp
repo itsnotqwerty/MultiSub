@@ -35,13 +35,23 @@ constexpr size_t kCanaryFeatureFft = 512;
 constexpr size_t kCanaryMaxSeconds = 20;
 constexpr size_t kCanaryMaxSamples = kTargetSampleRateHz * kCanaryMaxSeconds;
 constexpr size_t kCanaryMinSamples = kTargetSampleRateHz / 2;
-constexpr size_t kCanaryMinSpeechSamples = kTargetSampleRateHz / 2;
+constexpr size_t kCanaryMinSpeechSamples = (kTargetSampleRateHz * 35) / 100;
 constexpr size_t kCanaryPreferredUtteranceSamples = kTargetSampleRateHz * 2;
 constexpr size_t kCanaryForceFinalizeSamples = kTargetSampleRateHz * 8;
 constexpr size_t kCanaryEndSilenceSamples = static_cast<size_t>(kTargetSampleRateHz * 0.4f);
 constexpr size_t kCanaryMaxDecoderSteps = 256;
-constexpr float kSilenceEnergyThreshold = 0.008f;
-constexpr float kSpeechEnergyThreshold = 0.004f;
+constexpr float kDefaultNoiseGateDb = -40.0f;
+constexpr float kMinNoiseGateDb = -70.0f;
+constexpr float kMaxNoiseGateDb = -10.0f;
+constexpr float kMinSpeechEnergyThreshold = 0.0003f;
+constexpr float kMaxSpeechEnergyThreshold = 0.25f;
+constexpr float kMinSpeechRatioForFinalize = 0.22f;
+constexpr float kInUtteranceSpeechThresholdScale = 0.72f;
+
+float db_to_linear_rms(float db)
+{
+	return std::pow(10.0f, db / 20.0f);
+}
 
 struct BufferedUtterance {
 	std::vector<float> samples;
@@ -583,6 +593,8 @@ struct AsrEngine::SessionState {
 	std::vector<std::string> vocab_tokens;
 	CanaryPromptIds prompt_ids;
 	BufferedUtterance buffered_utterance;
+	float speech_energy_threshold = db_to_linear_rms(kDefaultNoiseGateDb);
+	float silence_energy_threshold = db_to_linear_rms(kDefaultNoiseGateDb) * 0.4f;
 	bool loaded = false;
 
 #if defined(MULTISUB_ENABLE_ONNX_RUNTIME) && MULTISUB_ENABLE_ONNX_RUNTIME
@@ -653,6 +665,18 @@ bool AsrEngine::is_loaded() const
 	return state_ != nullptr && state_->loaded;
 }
 
+void AsrEngine::set_noise_gate_db(float noise_gate_db)
+{
+	if (state_ == nullptr) {
+		return;
+	}
+
+	const float clamped_db = std::clamp(noise_gate_db, kMinNoiseGateDb, kMaxNoiseGateDb);
+	const float speech_threshold = std::clamp(db_to_linear_rms(clamped_db), kMinSpeechEnergyThreshold, kMaxSpeechEnergyThreshold);
+	state_->speech_energy_threshold = speech_threshold;
+	state_->silence_energy_threshold = speech_threshold * 0.4f;
+}
+
 std::string AsrEngine::transcribe(const AudioChunk &chunk, float &confidence)
 {
 	if (chunk.sample_count == 0) {
@@ -683,22 +707,29 @@ std::string AsrEngine::transcribe(const AudioChunk &chunk, float &confidence)
 	state_->buffered_utterance.end_timestamp_ns = chunk.timestamp_ns;
 
 	const float chunk_energy = estimate_energy(chunk_samples);
-	if (chunk_energy >= kSpeechEnergyThreshold) {
+	const float in_utterance_threshold = std::max(
+		state_->silence_energy_threshold * 1.15f,
+		state_->speech_energy_threshold * kInUtteranceSpeechThresholdScale);
+	const bool continuing_utterance = state_->buffered_utterance.speech_samples > 0;
+	const bool is_speech_chunk =
+		chunk_energy >= state_->speech_energy_threshold || (continuing_utterance && chunk_energy >= in_utterance_threshold);
+	if (is_speech_chunk) {
 		state_->buffered_utterance.speech_samples += chunk_samples.size();
 		state_->buffered_utterance.trailing_silence_samples = 0;
 	} else {
 		state_->buffered_utterance.trailing_silence_samples += chunk_samples.size();
 	}
 
-	if (chunk_energy < kSilenceEnergyThreshold && state_->buffered_utterance.samples.size() < kCanaryMinSamples) {
+	if (chunk_energy < state_->silence_energy_threshold && state_->buffered_utterance.samples.size() < kCanaryMinSamples) {
 		confidence = 0.0f;
 		return {};
 	}
 
 	const size_t buffered_samples = state_->buffered_utterance.samples.size();
-	const float buffered_energy = estimate_energy(state_->buffered_utterance.samples);
-	const bool has_enough_speech = state_->buffered_utterance.speech_samples >= kCanaryMinSpeechSamples ||
-		(buffered_samples >= kCanaryPreferredUtteranceSamples && buffered_energy >= kSilenceEnergyThreshold * 1.1f);
+	const float speech_ratio =
+		buffered_samples > 0 ? static_cast<float>(state_->buffered_utterance.speech_samples) / static_cast<float>(buffered_samples) : 0.0f;
+	const bool has_enough_speech = state_->buffered_utterance.speech_samples >= kCanaryMinSpeechSamples &&
+		speech_ratio >= kMinSpeechRatioForFinalize;
 	const bool silence_endpoint = has_enough_speech && state_->buffered_utterance.trailing_silence_samples >= kCanaryEndSilenceSamples;
 	const bool preferred_window_reached = has_enough_speech && buffered_samples >= kCanaryPreferredUtteranceSamples;
 	const bool force_window_reached = buffered_samples >= kCanaryForceFinalizeSamples;

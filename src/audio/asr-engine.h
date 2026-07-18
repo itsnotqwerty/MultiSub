@@ -15,6 +15,7 @@ public:
 
 	bool load_model(const std::string &model_path);
 	bool is_loaded() const;
+	void set_noise_gate_db(float noise_gate_db);
 	std::string transcribe(const AudioChunk &chunk, float &confidence);
 
 private:

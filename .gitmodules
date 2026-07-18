@@ -1,0 +1,6 @@
+[submodule "third_party/av_hubert"]
+	path = third_party/av_hubert
+	url = https://github.com/facebookresearch/av_hubert.git
+[submodule "third_party/canary-1b-v2-onnx"]
+	path = third_party/canary-1b-v2-onnx
+	url = https://huggingface.co/istupakov/canary-1b-v2-onnx

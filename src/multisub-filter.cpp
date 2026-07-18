@@ -15,6 +15,7 @@
 #include "fusion/subtitle-buffer.h"
 #include "fusion/subtitle-fusion.h"
 #include "multisub/audio-engine.h"
+#include "multisub/vision-engine.h"
 #include "utils/config.h"
 #include "utils/logger.h"
 #include "utils/model-loader.h"
@@ -27,6 +28,7 @@ struct MultiSubFilter {
 	obs_source_t *overlay_source = nullptr;
 	RuntimeConfig config;
 	AudioEngine audio_engine;
+	VisionEngine vision_engine;
 	SubtitleFusion fusion;
 	SubtitleBuffer subtitle_buffer{256};
 	MultiChannelRenderer renderer;
@@ -36,8 +38,20 @@ struct MultiSubFilter {
 	uint32_t overlay_layout_width = 0;
 	uint32_t overlay_layout_height = 0;
 	uint64_t captured_chunks = 0;
+	uint64_t captured_video_frames = 0;
 	float last_capture_energy = 0.0f;
 };
+
+static VisionRuntimeConfig build_vision_runtime_config(const RuntimeConfig &config)
+{
+	VisionRuntimeConfig vision_config;
+	vision_config.enabled = config.vision_enabled;
+	vision_config.lipread_model_path = config.lipread_model_path;
+	vision_config.lipread_runner_python = config.lipread_runner_python;
+	vision_config.lipread_min_confidence = config.lipread_min_confidence;
+	vision_config.lipread_min_inference_frames = static_cast<size_t>(std::max(config.lipread_min_frames, 1));
+	return vision_config;
+}
 
 static bool is_recent_capture_source_audio(const MultiSubFilter *filter)
 {
@@ -55,15 +69,26 @@ static bool is_recent_capture_source_audio(const MultiSubFilter *filter)
 
 static void log_audio_results(const std::vector<AudioResult> &results)
 {
+	size_t empty_transcript_count = 0;
+	static size_t empty_transcript_summary_counter = 0;
+
 	for (const AudioResult &result : results) {
 		if (!result.transcript.empty()) {
 			log_info("Live ASR transcript: '" + result.transcript + "' (confidence=" + std::to_string(result.transcript_confidence) + ")");
 		} else {
-			log_info("Live ASR transcript: <empty> (confidence=" + std::to_string(result.transcript_confidence) + ")");
+			++empty_transcript_count;
 		}
 
 		if (!result.environmental_events.empty()) {
 			log_info("Live environmental labels: '" + result.environmental_events.front() + "' (confidence=" + std::to_string(result.environmental_confidence) + ")");
+		}
+	}
+
+	if (empty_transcript_count > 0) {
+		empty_transcript_summary_counter += empty_transcript_count;
+		if (empty_transcript_summary_counter >= 25) {
+			log_info("Live ASR skipped " + std::to_string(empty_transcript_summary_counter) + " empty transcript chunk(s)");
+			empty_transcript_summary_counter = 0;
 		}
 	}
 }
@@ -294,47 +319,55 @@ static void multisub_filter_video_tick(void *data, float)
 		return;
 	}
 
+	constexpr uint64_t kOverlaySubtitleTtlNs = 2500000000ULL;
+
+	const uint32_t source_width = obs_source_get_base_width(filter->source);
+	const uint32_t source_height = obs_source_get_base_height(filter->source);
+	if (filter->config.vision_enabled && source_width > 0 && source_height > 0) {
+		VideoFrame frame;
+		frame.timestamp_ns = static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+			std::chrono::steady_clock::now().time_since_epoch())
+			.count());
+		frame.width = std::min<uint32_t>(source_width, 160U);
+		frame.height = std::min<uint32_t>(source_height, 96U);
+		frame.rgba.assign(static_cast<size_t>(frame.width) * static_cast<size_t>(frame.height) * 4U, 0U);
+		filter->vision_engine.submit_frame(std::move(frame));
+		filter->captured_video_frames += 1;
+	}
+
 	std::vector<AudioResult> results = filter->audio_engine.consume_results();
-	if (results.empty()) {
-		if (filter->captured_chunks == 0) {
-			update_overlay_source_text(filter, "[MultiSub] No audio captured - choose Audio Source in filter settings");
-		} else if (!filter->subtitle_buffer.snapshot().empty()) {
-			update_overlay_source_text(filter,
-				filter->renderer.format_for_overlay(
-					filter->subtitle_buffer.snapshot(),
-					filter->config.environmental_enabled,
-					filter->config.dialogue_enabled,
-					filter->config.show_channel_labels));
-		} else {
-			update_overlay_source_text(filter, "");
+	std::vector<SubtitleEvent> events;
+	if (!results.empty()) {
+		if (filter->config.debug_asr_output) {
+			log_audio_results(results);
 		}
-		return;
+
+		std::vector<SubtitleEvent> audio_events = filter->fusion.fuse_audio(results);
+		events.insert(events.end(), audio_events.begin(), audio_events.end());
 	}
 
-	if (filter->config.debug_asr_output) {
-		log_audio_results(results);
+	std::vector<TimelineEvent> vision_timeline_events = filter->vision_engine.consume_timeline_events();
+	if (!vision_timeline_events.empty()) {
+		std::vector<SubtitleEvent> vision_events = filter->fusion.fuse_timeline(vision_timeline_events);
+		events.insert(events.end(), vision_events.begin(), vision_events.end());
 	}
 
-	std::vector<SubtitleEvent> events = filter->fusion.fuse_audio(results);
+	const std::vector<SubtitleEvent> recent_events = filter->subtitle_buffer.snapshot_recent(kOverlaySubtitleTtlNs);
+
 	if (events.empty()) {
-		if (!filter->subtitle_buffer.snapshot().empty()) {
+		if (filter->captured_chunks == 0) {
+			if (filter->config.vision_enabled && filter->captured_video_frames > 0) {
+				update_overlay_source_text(filter, "[MultiSub] Listening for audio and visual speech...");
+			} else {
+				update_overlay_source_text(filter, "[MultiSub] No audio captured - choose Audio Source in filter settings");
+			}
+		} else if (!recent_events.empty()) {
 			update_overlay_source_text(filter,
 				filter->renderer.format_for_overlay(
-					filter->subtitle_buffer.snapshot(),
+					recent_events,
 					filter->config.environmental_enabled,
 					filter->config.dialogue_enabled,
 					filter->config.show_channel_labels));
-			return;
-		}
-
-		if (!onnx_backend_available() && !filter->config.asr_model_path.empty()) {
-			update_overlay_source_text(filter, "[MultiSub] ONNX Runtime backend unavailable in this build");
-			return;
-		}
-
-		const bool has_asr_model = !filter->config.asr_model_path.empty() && model_path_exists(filter->config.asr_model_path);
-		if (filter->last_capture_energy > 0.0008f && !has_asr_model) {
-			update_overlay_source_text(filter, "[MultiSub] Speech detected - set ASR model path for transcription");
 		} else {
 			update_overlay_source_text(filter, "");
 		}
@@ -342,8 +375,9 @@ static void multisub_filter_video_tick(void *data, float)
 	}
 
 	filter->subtitle_buffer.push(events);
+	const std::vector<SubtitleEvent> refreshed_recent_events = filter->subtitle_buffer.snapshot_recent(kOverlaySubtitleTtlNs);
 	const std::string overlay_text = filter->renderer.format_for_overlay(
-		filter->subtitle_buffer.snapshot(),
+		refreshed_recent_events,
 		filter->config.environmental_enabled,
 		filter->config.dialogue_enabled,
 		filter->config.show_channel_labels);
@@ -365,9 +399,15 @@ static void *multisub_filter_create(obs_data_t *settings, obs_source_t *source)
 		filter->config.environmental_enabled = obs_data_get_bool(settings, "environmental_enabled");
 		filter->config.show_channel_labels = obs_data_get_bool(settings, "show_channel_labels");
 		filter->config.debug_asr_output = obs_data_get_bool(settings, "debug_asr_output");
+		filter->config.vision_enabled = obs_data_get_bool(settings, "vision_enabled");
 		filter->config.max_latency_ms = static_cast<int>(obs_data_get_int(settings, "max_latency_ms"));
+		filter->config.noise_gate_db = static_cast<float>(obs_data_get_double(settings, "noise_gate_db"));
 		filter->config.asr_model_path = obs_data_get_string(settings, "asr_model_path");
 		filter->config.noise_model_path = obs_data_get_string(settings, "noise_model_path");
+		filter->config.lipread_model_path = obs_data_get_string(settings, "lipread_model_path");
+		filter->config.lipread_runner_python = obs_data_get_string(settings, "lipread_runner_python");
+		filter->config.lipread_min_confidence = static_cast<float>(obs_data_get_double(settings, "lipread_min_confidence"));
+		filter->config.lipread_min_frames = static_cast<int>(obs_data_get_int(settings, "lipread_min_frames"));
 		const char *configured_audio_source = obs_data_get_string(settings, "audio_source_name");
 		if (configured_audio_source == nullptr || configured_audio_source[0] == '\0') {
 			const std::string default_audio_source = get_default_audio_source_name();
@@ -386,8 +426,13 @@ static void *multisub_filter_create(obs_data_t *settings, obs_source_t *source)
 		update_overlay_source_text(filter, "[MultiSub] Listening for audio...");
 	}
 
-	filter->audio_engine.configure_models(filter->config.asr_model_path, filter->config.noise_model_path);
+	filter->audio_engine.configure_models(
+		filter->config.asr_model_path,
+		filter->config.noise_model_path,
+		filter->config.noise_gate_db);
 	filter->audio_engine.start();
+	filter->vision_engine.configure(build_vision_runtime_config(filter->config));
+	filter->vision_engine.start();
 
 	log_info("Created MultiSub filter instance");
 	return filter;
@@ -401,6 +446,7 @@ static void multisub_filter_destroy(void *data)
 	}
 
 	filter->audio_engine.stop();
+	filter->vision_engine.stop();
 	clear_audio_capture_source(filter);
 	if (filter->overlay_source != nullptr) {
 		obs_source_release(filter->overlay_source);
@@ -421,9 +467,15 @@ static void multisub_filter_update(void *data, obs_data_t *settings)
 	filter->config.environmental_enabled = obs_data_get_bool(settings, "environmental_enabled");
 	filter->config.show_channel_labels = obs_data_get_bool(settings, "show_channel_labels");
 	filter->config.debug_asr_output = obs_data_get_bool(settings, "debug_asr_output");
+	filter->config.vision_enabled = obs_data_get_bool(settings, "vision_enabled");
 	filter->config.max_latency_ms = static_cast<int>(obs_data_get_int(settings, "max_latency_ms"));
+	filter->config.noise_gate_db = static_cast<float>(obs_data_get_double(settings, "noise_gate_db"));
 	filter->config.asr_model_path = obs_data_get_string(settings, "asr_model_path");
 	filter->config.noise_model_path = obs_data_get_string(settings, "noise_model_path");
+	filter->config.lipread_model_path = obs_data_get_string(settings, "lipread_model_path");
+	filter->config.lipread_runner_python = obs_data_get_string(settings, "lipread_runner_python");
+	filter->config.lipread_min_confidence = static_cast<float>(obs_data_get_double(settings, "lipread_min_confidence"));
+	filter->config.lipread_min_frames = static_cast<int>(obs_data_get_int(settings, "lipread_min_frames"));
 	const char *configured_audio_source = obs_data_get_string(settings, "audio_source_name");
 	if (configured_audio_source == nullptr || configured_audio_source[0] == '\0') {
 		const std::string default_audio_source = get_default_audio_source_name();
@@ -433,7 +485,11 @@ static void multisub_filter_update(void *data, obs_data_t *settings)
 		}
 	}
 	set_audio_capture_source(filter, configured_audio_source);
-	filter->audio_engine.configure_models(filter->config.asr_model_path, filter->config.noise_model_path);
+	filter->audio_engine.configure_models(
+		filter->config.asr_model_path,
+		filter->config.noise_model_path,
+		filter->config.noise_gate_db);
+	filter->vision_engine.configure(build_vision_runtime_config(filter->config));
 }
 
 static obs_properties_t *multisub_filter_properties(void *)
@@ -443,7 +499,9 @@ static obs_properties_t *multisub_filter_properties(void *)
 	obs_properties_add_bool(props, "environmental_enabled", obs_module_text("MultiSub.EnvironmentalEnabled"));
 	obs_properties_add_bool(props, "show_channel_labels", obs_module_text("MultiSub.ShowChannelLabels"));
 	obs_properties_add_bool(props, "debug_asr_output", obs_module_text("MultiSub.DebugAsrOutput"));
+	obs_properties_add_bool(props, "vision_enabled", obs_module_text("MultiSub.VisionEnabled"));
 	obs_properties_add_int(props, "max_latency_ms", obs_module_text("MultiSub.MaxLatencyMs"), 50, 2000, 10);
+	obs_properties_add_float_slider(props, "noise_gate_db", obs_module_text("MultiSub.NoiseGateDb"), -70.0, -10.0, 1.0);
 	obs_property_t *audio_source_prop = obs_properties_add_list(props, "audio_source_name",
 		obs_module_text("MultiSub.AudioSource"), OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
 	obs_property_list_add_string(audio_source_prop, "Auto (filtered source)", "");
@@ -452,6 +510,10 @@ static obs_properties_t *multisub_filter_properties(void *)
 		"", nullptr);
 	obs_properties_add_path(props, "noise_model_path", obs_module_text("MultiSub.NoiseModelPath"), OBS_PATH_FILE,
 		"ONNX model (*.onnx);;All files (*.*)", nullptr);
+	obs_properties_add_text(props, "lipread_model_path", obs_module_text("MultiSub.LipReadModelPath"), OBS_TEXT_DEFAULT);
+	obs_properties_add_text(props, "lipread_runner_python", obs_module_text("MultiSub.LipReadRunnerPython"), OBS_TEXT_DEFAULT);
+	obs_properties_add_float_slider(props, "lipread_min_confidence", obs_module_text("MultiSub.LipReadMinConfidence"), 0.0, 1.0, 0.01);
+	obs_properties_add_int(props, "lipread_min_frames", obs_module_text("MultiSub.LipReadMinFrames"), 4, 64, 1);
 	return props;
 }
 
@@ -459,12 +521,18 @@ static void multisub_filter_defaults(obs_data_t *settings)
 {
 	obs_data_set_default_bool(settings, "dialogue_enabled", true);
 	obs_data_set_default_bool(settings, "environmental_enabled", true);
+	obs_data_set_default_bool(settings, "vision_enabled", false);
 	obs_data_set_default_bool(settings, "show_channel_labels", true);
 	obs_data_set_default_bool(settings, "debug_asr_output", false);
 	obs_data_set_default_int(settings, "max_latency_ms", 300);
+	obs_data_set_default_double(settings, "noise_gate_db", -40.0);
 	obs_data_set_default_string(settings, "audio_source_name", "");
 	obs_data_set_default_string(settings, "asr_model_path", "");
 	obs_data_set_default_string(settings, "noise_model_path", "");
+	obs_data_set_default_string(settings, "lipread_model_path", "third_party/av_hubert");
+	obs_data_set_default_string(settings, "lipread_runner_python", "python3");
+	obs_data_set_default_double(settings, "lipread_min_confidence", 0.45);
+	obs_data_set_default_int(settings, "lipread_min_frames", 12);
 }
 
 static void multisub_filter_video_render(void *data, gs_effect_t *effect)

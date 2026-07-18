@@ -49,12 +49,13 @@ void AudioEngine::stop()
 	}
 }
 
-void AudioEngine::configure_models(std::string asr_model_path, std::string noise_model_path)
+void AudioEngine::configure_models(std::string asr_model_path, std::string noise_model_path, float noise_gate_db)
 {
 	{
 		std::lock_guard<std::mutex> lock(config_mutex_);
 		asr_model_path_ = std::move(asr_model_path);
 		noise_model_path_ = std::move(noise_model_path);
+		noise_gate_db_ = noise_gate_db;
 		reload_models_ = true;
 	}
 	queue_cv_.notify_one();
@@ -89,18 +90,22 @@ void AudioEngine::process_loop()
 	for (;;) {
 		std::string pending_asr_path;
 		std::string pending_noise_path;
+		float pending_noise_gate_db = -40.0f;
 		bool should_reload = false;
 		{
 			std::lock_guard<std::mutex> lock(config_mutex_);
 			if (reload_models_) {
 				pending_asr_path = asr_model_path_;
 				pending_noise_path = noise_model_path_;
+				pending_noise_gate_db = noise_gate_db_;
 				reload_models_ = false;
 				should_reload = true;
 			}
 		}
 
 		if (should_reload) {
+			asr.set_noise_gate_db(pending_noise_gate_db);
+
 			if (!use_custom_asr && pending_asr_path != active_asr_path) {
 				asr.load_model(pending_asr_path);
 				active_asr_path = pending_asr_path;

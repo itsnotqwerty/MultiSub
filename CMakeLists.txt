@@ -15,6 +15,12 @@ include(helpers)
 
 add_library(${CMAKE_PROJECT_NAME} MODULE)
 
+target_compile_definitions(
+  ${CMAKE_PROJECT_NAME}
+  PRIVATE
+    MULTISUB_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+)
+
 target_compile_features(${CMAKE_PROJECT_NAME} PRIVATE cxx_std_20)
 
 target_include_directories(
@@ -105,6 +111,8 @@ target_sources(
     src/audio/asr-engine.cpp
     src/audio/noise-classifier.cpp
     src/audio/audio-utils.cpp
+    src/vision/lipread-engine.cpp
+    src/vision/vision-engine.cpp
     src/fusion/subtitle-fusion.cpp
     src/fusion/multi-channel-renderer.cpp
     src/fusion/subtitle-buffer.cpp

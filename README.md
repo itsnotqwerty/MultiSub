@@ -61,7 +61,7 @@ Roadmap details: [docs/roadmap.md](docs/roadmap.md)
 - Core: libobs, CMake 3.28+
 - ML runtime: ONNX Runtime (planned)
 - Audio preprocessing: RNNoise/FFmpeg options (planned)
-- Vision: OpenCV and/or MediaPipe (planned)
+- Vision: AV-HuBERT native runner bridge (phase 2 scaffold), OpenCV and/or MediaPipe (planned)
 
 ## Model Distribution
 
@@ -71,7 +71,25 @@ Models are not bundled in source by default. See [docs/models.md](docs/models.md
 
 For best subtitle quality, use the Canary ONNX bundle/decoder:
 
-- Recommended model: canary-1b-v2-onnx
+- Recommended model: third_party/canary-1b-v2-onnx
 - Hugging Face repo: [istupakov/canary-1b-v2-onnx](https://huggingface.co/istupakov/canary-1b-v2-onnx)
 
-When configuring the filter in OBS, set the ASR model path to the folder containing the ONNX bundle files (for example: encoder-model.onnx, decoder-model.onnx, config.json, and vocab.txt).
+When configuring the filter in OBS, set the ASR model path to the folder containing the ONNX bundle files (for example: third_party/canary-1b-v2-onnx with encoder-model.onnx, decoder-model.onnx, config.json, and vocab.txt).
+
+## Lip-Read Runner (Phase 2 Scaffold)
+
+Visual speech can be enabled in filter settings using the native AV-HuBERT bridge:
+
+- Lip-Read Model Path: `third_party/av_hubert` (or a `.pt` checkpoint)
+- Lip-Read Runner Python: `python3`
+- Lip-Read minimum confidence/frame window settings as needed for your latency budget
+
+Current scaffold uses `src/vision/avhubert_native_runner.py` for JSON IPC and graceful fallback while native decode wiring is being hardened.
+
+To force third_party AV-HuBERT decode execution, set:
+
+- `MULTISUB_AVHUBERT_ENABLE_DECODE=1`
+- `MULTISUB_AVHUBERT_REPO=/path/to/third_party/av_hubert`
+- `MULTISUB_AVHUBERT_CHECKPOINT=/path/to/checkpoint.pt`
+
+Decode also requires AV-HuBERT data/label directories via runner request payload.

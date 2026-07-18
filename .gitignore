@@ -8,9 +8,12 @@
 !/data
 !/src
 !/docs
+!/third_party
+!/third_party/**
 !.clang-format
 !.gersemirc
 !.gitignore
+!.gitmodules
 !buildspec.json
 !CMakeLists.txt
 !CMakePresets.json
