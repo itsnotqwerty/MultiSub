@@ -66,3 +66,12 @@ Roadmap details: [docs/roadmap.md](docs/roadmap.md)
 ## Model Distribution
 
 Models are not bundled in source by default. See [docs/models.md](docs/models.md) for licensing and download policy.
+
+## Recommended ASR Decoder
+
+For best subtitle quality, use the Canary ONNX bundle/decoder:
+
+- Recommended model: canary-1b-v2-onnx
+- Hugging Face repo: [istupakov/canary-1b-v2-onnx](https://huggingface.co/istupakov/canary-1b-v2-onnx)
+
+When configuring the filter in OBS, set the ASR model path to the folder containing the ONNX bundle files (for example: encoder-model.onnx, decoder-model.onnx, config.json, and vocab.txt).
