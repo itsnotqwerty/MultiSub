@@ -1,11 +1,49 @@
 #include "multisub/audio-engine.h"
 
+#include <algorithm>
 #include <condition_variable>
+#include <string_view>
 #include <thread>
 #include <utility>
 
 #include "asr-engine.h"
+#include "audio-utils.h"
 #include "noise-classifier.h"
+
+namespace {
+
+constexpr std::string_view kAmbientRoomToneLabel = "Ambient room tone";
+constexpr float kAmbientSuppressionConfidence = 0.6f;
+constexpr float kAmbientSilenceEnergyThreshold = 0.006f;
+
+bool contains_label(const std::vector<std::string> &labels, std::string_view target)
+{
+	return std::any_of(labels.begin(), labels.end(), [target](const std::string &label) {
+		return label == target;
+	});
+}
+
+multisub::AudioChunk suppress_noise_for_asr(
+	const multisub::AudioChunk &chunk,
+	const std::vector<std::string> &environmental_events,
+	float environmental_confidence)
+{
+	multisub::AudioChunk filtered = chunk;
+	if (filtered.mono_samples.empty()) {
+		return filtered;
+	}
+
+	const float chunk_energy = multisub::estimate_chunk_energy(chunk);
+	const bool ambient_room_tone = environmental_confidence >= kAmbientSuppressionConfidence &&
+		contains_label(environmental_events, kAmbientRoomToneLabel);
+	if (ambient_room_tone && chunk_energy <= kAmbientSilenceEnergyThreshold) {
+		std::fill(filtered.mono_samples.begin(), filtered.mono_samples.end(), 0.0f);
+	}
+
+	return filtered;
+}
+
+} // namespace
 
 namespace multisub {
 
@@ -131,16 +169,17 @@ void AudioEngine::process_loop()
 
 		AudioResult result;
 		result.timestamp_ns = chunk.timestamp_ns;
-		if (use_custom_asr) {
-			result.transcript = asr_transcriber_(chunk, result.transcript_confidence);
-		} else {
-			result.transcript = asr.transcribe(chunk, result.transcript_confidence);
-		}
-
 		if (use_custom_noise_classifier) {
 			result.environmental_events = noise_classifier_(chunk, result.environmental_confidence);
 		} else {
 			result.environmental_events = classifier.classify(chunk, result.environmental_confidence);
+		}
+
+		const AudioChunk asr_chunk = suppress_noise_for_asr(chunk, result.environmental_events, result.environmental_confidence);
+		if (use_custom_asr) {
+			result.transcript = asr_transcriber_(asr_chunk, result.transcript_confidence);
+		} else {
+			result.transcript = asr.transcribe(asr_chunk, result.transcript_confidence);
 		}
 
 		std::lock_guard<std::mutex> output_lock(output_mutex_);

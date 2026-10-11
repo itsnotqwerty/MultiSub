@@ -88,6 +88,17 @@
       }
     },
     {
+      "name": "arch-x86_64",
+      "inherits": ["ubuntu-x86_64"],
+      "displayName": "Arch Linux x86_64",
+      "description": "Build against system OBS and ONNX Runtime on Arch Linux",
+      "binaryDir": "${sourceDir}/build_arch_x86_64",
+      "cacheVariables": {
+        "CMAKE_INSTALL_PREFIX": "/usr",
+        "CMAKE_INSTALL_LIBDIR": "lib"
+      }
+    },
+    {
       "name": "ubuntu-ci-x86_64",
       "inherits": ["ubuntu-x86_64"],
       "displayName": "Ubuntu x86_64 CI build",
@@ -133,6 +144,13 @@
       "configurePreset": "ubuntu-x86_64",
       "displayName": "Ubuntu x86_64",
       "description": "Ubuntu build for x86_64",
+      "configuration": "RelWithDebInfo"
+    },
+    {
+      "name": "arch-x86_64",
+      "configurePreset": "arch-x86_64",
+      "displayName": "Arch Linux x86_64",
+      "description": "Arch Linux build for x86_64",
       "configuration": "RelWithDebInfo"
     },
     {
